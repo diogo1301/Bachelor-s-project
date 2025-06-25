@@ -1,0 +1,191 @@
+import numpy as np
+import os
+import re
+import matplotlib.pyplot as plt
+from matplotlib.patches import Arc, Wedge
+import matplotlib.patches as mpatches
+
+def read_prof_points(file_path):
+    with open(file_path, 'r') as f:
+        content = f.read()
+    x_match = re.search(r'\(x\s*([\d\.\s\-\+eE]+)\)', content)
+    y_match = re.search(r'\(y\s*([\d\.\s\-\+eE]+)\)', content)
+    if not x_match or not y_match:
+        raise ValueError(f"Impossible de trouver les coordonnées x et y dans {file_path}")
+    x_str = x_match.group(1).strip()
+    y_str = y_match.group(1).strip()
+    x_coords = np.fromstring(x_str, sep='\n')
+    y_coords = np.fromstring(y_str, sep='\n')
+    if len(x_coords) != len(y_coords):
+        raise ValueError(f"Le nombre de coordonnées x et y ne correspond pas dans {file_path}")
+    points = np.column_stack((x_coords, y_coords))
+    return points
+
+def thickness_by_angle(points, cyl_radius=0.03, angle_step_deg=10):
+    dist = np.sqrt(points[:,0]**2 + points[:,1]**2) - cyl_radius
+    mask = (dist > 0) & (dist <= 0.01)
+    points = points[mask]
+    dist = dist[mask]
+    angles = np.arctan2(points[:,1], points[:,0])
+    angle_edges = np.linspace(-np.pi, np.pi, int(360/angle_step_deg)+1)
+    mean_thickness = []
+    for i in range(len(angle_edges)-1):
+        in_sector = (angles >= angle_edges[i]) & (angles < angle_edges[i+1])
+        if np.any(in_sector):
+            mean_thickness.append(np.mean(dist[in_sector])*1000)  # mm
+        else:
+            mean_thickness.append(0)
+    return angle_edges, np.array(mean_thickness)
+
+# --- Lecture des fichiers et calcul de la moyenne par secteur ---
+folder_path = r"D:\Documentation\70"
+cyl_radius = 0.03  # m
+all_points_list = []
+for num in range(7050, 8001, 50):
+    file_path = os.path.join(folder_path, f"test{num}.prof")
+    if os.path.exists(file_path):
+        try:
+            points = read_prof_points(file_path)
+            all_points_list.append(points)
+        except Exception as e:
+            print(f"Erreur lecture {file_path} : {e}")
+
+if not all_points_list:
+    print("Aucun point à afficher.")
+    exit()
+
+all_points = np.vstack(all_points_list)
+angle_edges, mean_thickness = thickness_by_angle(all_points, cyl_radius, angle_step_deg=0.2)
+
+# --- Calcul des moyennes pour haut, côté, bas ---
+def mean_std_sector_range(mean_thickness, angle_edges, deg_min, deg_max):
+    # angle_edges en radians, mean_thickness même taille -1
+    # deg_min et deg_max en degrés
+    idxs = []
+    for i in range(len(angle_edges)-1):
+        theta_deg = (np.degrees(angle_edges[i]) + np.degrees(angle_edges[i+1])) / 2
+        # Gérer le passage par 180°/-180°
+        if deg_min < deg_max:
+            if deg_min <= theta_deg < deg_max:
+                idxs.append(i)
+        else:
+            # ex: 225 à 315 (passe par -180/180)
+            if theta_deg >= deg_min or theta_deg < deg_max:
+                idxs.append(i)
+    vals = [mean_thickness[i] for i in idxs if mean_thickness[i] > 0]
+    if vals:
+        return np.mean(vals), np.std(vals)
+    else:
+        return 0, 0
+
+# Moyennes par zone
+mean_top, std_top = mean_std_sector_range(mean_thickness, angle_edges, 45, 135)
+mean_side, std_side = mean_std_sector_range(mean_thickness, angle_edges, -45, 45)
+mean_bottom, std_bottom = mean_std_sector_range(mean_thickness, angle_edges, 225, 315)
+
+# --- Affichage ---
+fig, ax = plt.subplots(figsize=(8,8))
+inner_radius = cyl_radius*1000
+circle = plt.Circle((0,0), inner_radius, color='#2171b5', fill=False, linewidth=15, zorder=2)
+ax.add_patch(circle)
+for i in range(len(angle_edges)-1):
+    theta1 = np.degrees(angle_edges[i])
+    theta2 = np.degrees(angle_edges[i+1])
+    r_outer = inner_radius + mean_thickness[i]
+    arc = Arc((0,0), 2*r_outer, 2*r_outer, theta1=theta1, theta2=theta2,
+              color='#a6e6fa', lw=15, zorder=1)
+    ax.add_patch(arc)
+
+# Diamètre horizontal
+ax.plot([-inner_radius, inner_radius], [0,0], 'k-', lw=2, zorder=3)
+ax.annotate("60 mm", xy=(0,0), fontsize=22, ha='center', va='center', zorder=4)
+
+# --- Affichage des valeurs et flèches ---
+# Haut (x=0, au-dessus du cercle)
+ax.annotate('', xy=(0, inner_radius + mean_top + 5), xytext=(0, inner_radius),
+            arrowprops=dict(arrowstyle='<->', lw=2, color='k'))
+ax.annotate(f"{mean_top:.1f} ± {std_top:.1f} mm",
+            xy=(0, inner_radius + mean_top + 12), ha='center', fontsize=18)
+
+# Côté droit (y=0, à droite du cercle)
+ax.annotate('', xy=(inner_radius + mean_side + 5, 0), xytext=(inner_radius, 0),
+            arrowprops=dict(arrowstyle='<->', lw=2, color='k'))
+ax.annotate(f"{mean_side:.1f} ± {std_side:.1f} mm",
+            xy=(inner_radius + mean_side + 12, 0), va='center', fontsize=18)
+
+# Recherche du secteur où le point d'eau est le plus bas (y minimal)
+min_y = None
+best_idx = None
+for i in range(len(angle_edges)-1):
+    theta_deg = (np.degrees(angle_edges[i]) + np.degrees(angle_edges[i+1])) / 2
+    angle_rad = np.radians(theta_deg)
+    y = (inner_radius + mean_thickness[i]) * np.sin(angle_rad)
+    if (min_y is None or y < min_y) and mean_thickness[i] > 0:
+        min_y = y
+        best_idx = i
+
+if best_idx is not None:
+    val_bas = mean_thickness[best_idx]
+    # Calcul de la tolérance (écart-type) sur le secteur le plus bas
+    # On prend l'écart-type des distances dans ce secteur
+    theta_min = angle_edges[best_idx]
+    theta_max = angle_edges[best_idx+1]
+    # Sélectionne les points du secteur
+    mask_sector = (np.arctan2(all_points[:,1], all_points[:,0]) >= theta_min) & (np.arctan2(all_points[:,1], all_points[:,0]) < theta_max)
+    dist_sector = np.sqrt(all_points[mask_sector,0]**2 + all_points[mask_sector,1]**2) - cyl_radius
+    std_bas = np.std(dist_sector * 1000) if dist_sector.size > 0 else 0
+
+    # Flèche verticale alignée sur x=0
+    ax.annotate('', xy=(0, -inner_radius - val_bas - 5), xytext=(0, -inner_radius),
+                arrowprops=dict(arrowstyle='<->', lw=2, color='k'))
+    ax.annotate(f"{val_bas:.1f} mm",
+                xy=(0, -inner_radius - val_bas - 10), ha='center', fontsize=18)
+
+
+# Recherche du secteur entre 225° et 315° le plus proche de 270° (x=0, bas)
+target_angle = 270
+best_idx = None
+min_angle_diff = None
+for i in range(len(angle_edges)-1):
+    theta_deg = (np.degrees(angle_edges[i]) + np.degrees(angle_edges[i+1])) / 2
+    if 225 <= theta_deg < 315:
+        diff = abs(theta_deg - target_angle)
+        if (min_angle_diff is None) or (diff < min_angle_diff):
+            min_angle_diff = diff
+            best_idx = i
+
+if best_idx is not None:
+    # Affichage de la flèche et de la valeur à x=0, sous le cercle
+    val_bas = mean_thickness[best_idx]
+    ax.annotate('', xy=(0, -inner_radius - val_bas - 5), xytext=(0, -inner_radius),
+                arrowprops=dict(arrowstyle='<->', lw=2, color='k'))
+    ax.annotate(f"{val_bas:.1f} mm",
+                xy=(0, -inner_radius - val_bas - 20), ha='center', fontsize=18)
+
+
+ax.set_aspect('equal')
+ax.axis('off')
+ax.set_xlim(-inner_radius-30, inner_radius+30)
+ax.set_ylim(-inner_radius-30, inner_radius+30)
+plt.tight_layout()
+plt.show()
+
+# --- Affichage séparé de tous les points .prof par fichier ---
+import matplotlib.pyplot as plt
+
+fig2, ax2 = plt.subplots(figsize=(8,8))
+colors = plt.get_cmap('tab20', len(all_points_list))  # all_points_list = liste des points par fichier
+
+for idx, points in enumerate(all_points_list):
+    points = np.array(points)
+    if points.ndim == 2 and points.shape[1] == 2:
+        ax2.scatter(points[:,0]*1000, points[:,1]*1000, s=5, color=colors(idx), label=f'prof {idx+1}', alpha=0.7)
+
+ax2.set_aspect('equal')
+ax2.set_title("All profiles used for the average thickness", fontsize=16)
+ax2.set_xlabel("x (mm)")
+ax2.set_ylabel("y (mm)")
+ax2.grid(True)
+ax2.legend(fontsize=8, loc='best', markerscale=2, ncol=2)
+plt.tight_layout()
+plt.show()
