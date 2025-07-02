@@ -38,7 +38,7 @@ def thickness_by_angle(points, cyl_radius=0.03, angle_step_deg=10):
     return angle_edges, np.array(mean_thickness)
 
 # --- Lecture des fichiers et calcul de la moyenne par secteur ---
-folder_path = r"D:\Documentation\70"
+folder_path = r"D:\epaisseurs_moyennes\20degres"
 cyl_radius = 0.03  # m
 all_points_list = []
 for num in range(7050, 8001, 50):
@@ -86,7 +86,7 @@ mean_bottom, std_bottom = mean_std_sector_range(mean_thickness, angle_edges, 225
 # --- Affichage ---
 fig, ax = plt.subplots(figsize=(8,8))
 inner_radius = cyl_radius*1000
-circle = plt.Circle((0,0), inner_radius, color='#2171b5', fill=False, linewidth=15, zorder=2)
+circle = plt.Circle((0,0), inner_radius, color='#88888', fill=False, linewidth=15, zorder=2)
 ax.add_patch(circle)
 for i in range(len(angle_edges)-1):
     theta1 = np.degrees(angle_edges[i])
@@ -98,7 +98,7 @@ for i in range(len(angle_edges)-1):
 
 # Diamètre horizontal
 ax.plot([-inner_radius, inner_radius], [0,0], 'k-', lw=2, zorder=3)
-ax.annotate("60 mm", xy=(0,0), fontsize=22, ha='center', va='center', zorder=4)
+ax.annotate("60 mm", xy=(0, 3), fontsize=22, ha='center', va='center', zorder=4)
 
 # --- Affichage des valeurs et flèches ---
 # Haut (x=0, au-dessus du cercle)
@@ -189,3 +189,7 @@ ax2.grid(True)
 ax2.legend(fontsize=8, loc='best', markerscale=2, ncol=2)
 plt.tight_layout()
 plt.show()
+
+
+
+
